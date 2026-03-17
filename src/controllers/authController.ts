@@ -48,3 +48,9 @@ export async function getProfile(req: AuthRequest, res: Response, next: NextFunc
 export async function logout(_req: Request, res: Response) {
   res.json({ success: true, message: "Logged out successfully" });
 }
+
+export async function takeCodeParamFromURL(req: Request, res: Response) {
+  const code = req.query.code;
+  console.log(code);
+  res.json({ success: true, data: { code } });
+}
