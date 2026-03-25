@@ -2,6 +2,7 @@ import express from "express";
 import cors from "cors";
 import helmet from "helmet";
 import morgan from "morgan";
+import cookieParser from "cookie-parser";
 
 import authRoutes from "./routes/authRoutes";
 import songRoutes from "./routes/songRoutes";
@@ -14,6 +15,9 @@ const app = express();
 // ─── Security & Logging ───────────────────────────────────────────────────────
 app.use(helmet());
 app.use(morgan("dev"));
+
+// ─── Cookie Parsing ───────────────────────────────────────────────────────────
+app.use(cookieParser());
 
 // ─── CORS ─────────────────────────────────────────────────────────────────────
 app.use(

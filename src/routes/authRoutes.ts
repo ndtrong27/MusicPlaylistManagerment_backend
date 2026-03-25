@@ -4,10 +4,7 @@ import { authenticate } from "../middlewares/authenticate";
 
 const router = Router();
 
-router.post("/register", authController.register);
-router.post("/login", authController.login);
-router.get("/me", authenticate, authController.getProfile);
-router.post("/logout", authenticate, authController.logout);
-router.get("/", authController.takeCodeParamFromURL);
+router.get("/oauth2", authController.requestAccessTokenAndRefreshToken);
+router.post("/refresh", authController.refresh);
 
 export default router;

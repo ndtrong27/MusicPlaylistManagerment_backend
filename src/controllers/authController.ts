@@ -1,56 +1,168 @@
 import { Request, Response, NextFunction } from "express";
-import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
-import { AuthRequest } from "../middlewares/authenticate";
+// import bcrypt from "bcryptjs";
+// import { AuthRequest } from "../middlewares/authenticate";
 
 // Stub placeholder - replace with Prisma calls
 const users: Array<{ id: string; username: string; email: string; password: string }> = [];
 
-export async function register(req: Request, res: Response, next: NextFunction) {
-  try {
-    const { username, email, password } = req.body;
-    const hashed = await bcrypt.hash(password, 10);
-    const user = { id: Date.now().toString(), username, email, password: hashed };
-    users.push(user);
-    res.status(201).json({ success: true, data: { id: user.id, username, email } });
-  } catch (err) {
-    next(err);
-  }
-}
 
-export async function login(req: Request, res: Response, next: NextFunction) {
+export async function requestAccessTokenAndRefreshToken(req: Request, res: Response) {
   try {
-    const { email, password } = req.body;
-    const user = users.find((u) => u.email === email);
-    if (!user || !(await bcrypt.compare(password, user.password))) {
-      res.status(401).json({ success: false, message: "Invalid credentials" });
+    const code = req.query.code as string;
+    console.log("OAuth2 Code received:", code);
+
+    if (!code) {
+      res.status(400).json({ success: false, message: "No code provided" });
       return;
     }
-    const token = jwt.sign(
-      { id: user.id, email: user.email },
-      process.env.JWT_SECRET || "secret",
-      { expiresIn: "7d" }
+
+    const clientId = process.env.SPOTIFY_CLIENT_ID || "";
+    const clientSecret = process.env.SPOTIFY_CLIENT_SECRET || "";
+    const redirectUri = process.env.SPOTIFY_REDIRECT_URI || "";
+
+    const params = new URLSearchParams();
+    params.append("code", code);
+    params.append("redirect_uri", redirectUri);
+    params.append("grant_type", "authorization_code");
+
+    const authHeader = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
+
+    const response = await fetch("https://accounts.spotify.com/api/token", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Authorization": `Basic ${authHeader}`,
+      },
+      body: params.toString(),
+    });
+
+    const data: any = await response.json();
+
+    if (!response.ok) {
+      console.error("Spotify token error:", data);
+      res.status(response.status).json({ success: false, message: "Failed to exchange token", error: data });
+      return;
+    }
+
+    if (data.refresh_token) {
+      res.cookie("refresh_token", data.refresh_token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "development",
+        sameSite: "lax",
+        maxAge: 30 * 24 * 60 * 60 * 1000,
+      });
+    }
+
+    // Fetch user profile from Spotify
+    const userResponse = await fetch("https://api.spotify.com/v1/me", {
+      method: "GET",
+      headers: {
+        "Authorization": `Bearer ${data.access_token}`,
+      },
+    });
+
+    const userData: any = await userResponse.json();
+    const user = {
+      id: userData.id,
+      username: userData.display_name,
+      email: userData.email,
+    };
+
+    const sessionToken = jwt.sign(
+      { spotifyAccessToken: data.access_token, user },
+      process.env.JWT_SECRET || "default_secret_key",
+      { expiresIn: "1h" }
     );
-    res.json({ success: true, data: { accessToken: token, user: { id: user.id, email: user.email, username: user.username } } });
+
+    res.json({
+      success: true,
+      data: {
+        access_token: sessionToken,
+        expires_in: data.expires_in,
+        user
+      }
+    });
   } catch (err) {
-    next(err);
+    console.error("Error in oauth2:", err);
+    res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
 
-export async function getProfile(req: AuthRequest, res: Response, next: NextFunction) {
+export async function refresh(req: Request, res: Response) {
   try {
-    const user = users.find((u) => u.id === req.user?.id);
-    if (!user) { res.status(404).json({ success: false, message: "User not found" }); return; }
-    res.json({ success: true, data: { id: user.id, email: user.email, username: user.username } });
-  } catch (err) { next(err); }
-}
+    const refresh_token = req.cookies?.refresh_token;
+    if (!refresh_token) {
+      res.status(401).json({ success: false, message: "No refresh token provided in cookies" });
+      return;
+    }
 
-export async function logout(_req: Request, res: Response) {
-  res.json({ success: true, message: "Logged out successfully" });
-}
+    const clientId = process.env.SPOTIFY_CLIENT_ID || "";
+    const clientSecret = process.env.SPOTIFY_CLIENT_SECRET || "";
 
-export async function takeCodeParamFromURL(req: Request, res: Response) {
-  const code = req.query.code;
-  console.log(code);
-  res.json({ success: true, data: { code } });
+    const params = new URLSearchParams();
+    params.append("grant_type", "refresh_token");
+    params.append("refresh_token", refresh_token);
+
+    const authHeader = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
+
+    const response = await fetch("https://accounts.spotify.com/api/token", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Authorization": `Basic ${authHeader}`,
+      },
+      body: params.toString(),
+    });
+
+    const data: any = await response.json();
+
+    if (!response.ok) {
+      console.error("Spotify refresh error:", data);
+      res.status(response.status).json({ success: false, message: "Failed to refresh token", error: data });
+      return;
+    }
+
+    if (data.refresh_token) {
+      res.cookie("refresh_token", data.refresh_token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "development",
+        sameSite: "lax",
+        maxAge: 30 * 24 * 60 * 60 * 1000,
+      });
+    }
+
+    // Fetch user profile from Spotify
+    const userResponse = await fetch("https://api.spotify.com/v1/me", {
+      method: "GET",
+      headers: {
+        "Authorization": `Bearer ${data.access_token}`,
+      },
+    });
+
+    const userData: any = await userResponse.json();
+    const user = {
+      id: userData.id,
+      username: userData.display_name,
+      email: userData.email,
+    };
+
+    const sessionToken = jwt.sign(
+      { spotifyAccessToken: data.access_token, user },
+      process.env.JWT_SECRET || "default_secret_key",
+      { expiresIn: "1h" }
+    );
+
+    res.json({
+      success: true,
+      data: {
+        access_token: sessionToken,
+        expires_in: data.expires_in,
+        user
+      }
+    });
+  } catch (err) {
+    console.error("Error in refresh:", err);
+    res.status(500).json({ success: false, message: "Internal server error" });
+  }
 }
