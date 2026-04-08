@@ -1,7 +1,7 @@
 import { Response, NextFunction } from "express";
 import { AuthRequest } from "../middlewares/authenticate";
 
-// Stub placeholder - replace with Prisma calls
+// Stub placeholder
 const songs: Array<{ id: string; title: string; artist: string; duration: number; userId: string }> = [];
 
 export async function getAllSongs(req: AuthRequest, res: Response, next: NextFunction) {

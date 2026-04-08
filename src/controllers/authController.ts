@@ -1,168 +1,116 @@
-import { Request, Response, NextFunction } from "express";
-import jwt from "jsonwebtoken";
-// import bcrypt from "bcryptjs";
-// import { AuthRequest } from "../middlewares/authenticate";
+import { Request, Response } from 'express';
 
-// Stub placeholder - replace with Prisma calls
-const users: Array<{ id: string; username: string; email: string; password: string }> = [];
-
-
-export async function requestAccessTokenAndRefreshToken(req: Request, res: Response) {
-  try {
-    const code = req.query.code as string;
-    console.log("OAuth2 Code received:", code);
-
-    if (!code) {
-      res.status(400).json({ success: false, message: "No code provided" });
-      return;
-    }
-
-    const clientId = process.env.SPOTIFY_CLIENT_ID || "";
-    const clientSecret = process.env.SPOTIFY_CLIENT_SECRET || "";
-    const redirectUri = process.env.SPOTIFY_REDIRECT_URI || "";
-
-    const params = new URLSearchParams();
-    params.append("code", code);
-    params.append("redirect_uri", redirectUri);
-    params.append("grant_type", "authorization_code");
-
-    const authHeader = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
-
-    const response = await fetch("https://accounts.spotify.com/api/token", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Authorization": `Basic ${authHeader}`,
-      },
-      body: params.toString(),
-    });
-
-    const data: any = await response.json();
-
-    if (!response.ok) {
-      console.error("Spotify token error:", data);
-      res.status(response.status).json({ success: false, message: "Failed to exchange token", error: data });
-      return;
-    }
-
-    if (data.refresh_token) {
-      res.cookie("refresh_token", data.refresh_token, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "development",
-        sameSite: "lax",
-        maxAge: 30 * 24 * 60 * 60 * 1000,
-      });
-    }
-
-    // Fetch user profile from Spotify
-    const userResponse = await fetch("https://api.spotify.com/v1/me", {
-      method: "GET",
-      headers: {
-        "Authorization": `Bearer ${data.access_token}`,
-      },
-    });
-
-    const userData: any = await userResponse.json();
-    const user = {
-      id: userData.id,
-      username: userData.display_name,
-      email: userData.email,
-    };
-
-    const sessionToken = jwt.sign(
-      { spotifyAccessToken: data.access_token, user },
-      process.env.JWT_SECRET || "default_secret_key",
-      { expiresIn: "1h" }
-    );
-
-    res.json({
-      success: true,
-      data: {
-        access_token: sessionToken,
-        expires_in: data.expires_in,
-        user
-      }
-    });
-  } catch (err) {
-    console.error("Error in oauth2:", err);
-    res.status(500).json({ success: false, message: "Internal server error" });
-  }
+// ── Spotify Refresh Token helper ─────────────────────────────────────────────
+interface SpotifyTokenResponse {
+  access_token: string;
+  token_type: string;
+  scope: string;
+  expires_in: number;
+  refresh_token?: string;
 }
 
-export async function refresh(req: Request, res: Response) {
+export const refresh = async (req: Request, res: Response) => {
   try {
-    const refresh_token = req.cookies?.refresh_token;
-    if (!refresh_token) {
-      res.status(401).json({ success: false, message: "No refresh token provided in cookies" });
-      return;
+    const provider_refresh_token = req.cookies?.refresh_token;
+
+    if (!provider_refresh_token || typeof provider_refresh_token !== 'string') {
+      return res.status(401).json({
+        success: false,
+        message: 'No valid refresh token found in cookies',
+      });
     }
 
-    const clientId = process.env.SPOTIFY_CLIENT_ID || "";
-    const clientSecret = process.env.SPOTIFY_CLIENT_SECRET || "";
+    const clientId = process.env.SPOTIFY_CLIENT_ID;
+    const clientSecret = process.env.SPOTIFY_CLIENT_SECRET;
+
+    if (!clientId || !clientSecret) {
+      console.error('Missing SPOTIFY_CLIENT_ID or SPOTIFY_CLIENT_SECRET in environment');
+      return res.status(500).json({
+        success: false,
+        message: 'Server configuration error: missing Spotify credentials',
+      });
+    }
+
+    const authHeader = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
 
     const params = new URLSearchParams();
-    params.append("grant_type", "refresh_token");
-    params.append("refresh_token", refresh_token);
+    params.append('grant_type', 'refresh_token');
+    params.append('refresh_token', provider_refresh_token);
 
-    const authHeader = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
-
-    const response = await fetch("https://accounts.spotify.com/api/token", {
-      method: "POST",
+    const tokenRes = await fetch('https://accounts.spotify.com/api/token', {
+      method: 'POST',
       headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Authorization": `Basic ${authHeader}`,
+        'Authorization': `Basic ${authHeader}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
       },
       body: params.toString(),
     });
 
-    const data: any = await response.json();
+    const data = (await tokenRes.json()) as
+      | SpotifyTokenResponse
+      | { error: string; error_description: string };
 
-    if (!response.ok) {
-      console.error("Spotify refresh error:", data);
-      res.status(response.status).json({ success: false, message: "Failed to refresh token", error: data });
-      return;
-    }
-
-    if (data.refresh_token) {
-      res.cookie("refresh_token", data.refresh_token, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "development",
-        sameSite: "lax",
-        maxAge: 30 * 24 * 60 * 60 * 1000,
+    if (!tokenRes.ok) {
+      console.error('[authController.refresh] Spotify error:', data);
+      return res.status(tokenRes.status).json({
+        success: false,
+        message: 'Failed to refresh Spotify token',
+        error: data,
       });
     }
 
-    // Fetch user profile from Spotify
-    const userResponse = await fetch("https://api.spotify.com/v1/me", {
-      method: "GET",
-      headers: {
-        "Authorization": `Bearer ${data.access_token}`,
-      },
-    });
-
-    const userData: any = await userResponse.json();
-    const user = {
-      id: userData.id,
-      username: userData.display_name,
-      email: userData.email,
-    };
-
-    const sessionToken = jwt.sign(
-      { spotifyAccessToken: data.access_token, user },
-      process.env.JWT_SECRET || "default_secret_key",
-      { expiresIn: "1h" }
-    );
-
-    res.json({
+    return res.json({
       success: true,
-      data: {
-        access_token: sessionToken,
-        expires_in: data.expires_in,
-        user
-      }
+      data: data as SpotifyTokenResponse,
     });
-  } catch (err) {
-    console.error("Error in refresh:", err);
-    res.status(500).json({ success: false, message: "Internal server error" });
+  } catch (error: unknown) {
+    console.error('[authController.refresh]', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Internal server error during token refresh',
+    });
   }
+};
+
+export const processCallback = (req: Request, res: Response) => {
+
+  const accessToken = req.query.access_token as string | undefined;
+  const refreshToken = req.query.provider_refresh_token as string | undefined;
+
+  if (!accessToken || !refreshToken) {
+    return res.redirect('http://localhost:3000/callback?error=missing_tokens');
+  }
+
+  // Save refresh_token in an HTTP-only cookie
+  res.cookie('refresh_token', refreshToken, {
+    httpOnly: true,
+    secure: false,
+    sameSite: 'lax',
+    maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+  });
+
+  // Redirect to frontend callback along with access token. 
+  // We use hash fragment so it matches your callback page logic expecting provider_token in hash.
+  return res.redirect(`${process.env.CLIENT_URL || 'http://localhost:3000'}/callback#access_token=${accessToken}`);
+
+};
+
+export const saveRefreshToken = (req: Request, res: Response) => {
+  const refreshToken = req.query.refresh_token as string | undefined;
+  if (!refreshToken) {
+    return res.status(400).json({
+      success: false,
+      message: 'Refresh token is required',
+    });
+  }
+  res.cookie('refresh_token', refreshToken, {
+    httpOnly: true,
+    secure: false,
+    sameSite: 'lax',
+    maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+  });
+  return res.json({
+    success: true,
+    message: 'Refresh token saved successfully',
+  });
 }

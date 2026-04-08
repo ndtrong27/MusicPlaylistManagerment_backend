@@ -1,7 +1,7 @@
 import { Response, NextFunction } from "express";
 import { AuthRequest } from "../middlewares/authenticate";
 
-// Stub placeholder - replace with Prisma calls
+// Stub placeholder
 type Playlist = { id: string; name: string; description?: string; isPublic: boolean; userId: string; songs: string[] };
 const playlists: Playlist[] = [];
 
