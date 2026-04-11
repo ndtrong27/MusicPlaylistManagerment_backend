@@ -72,28 +72,6 @@ export const refresh = async (req: Request, res: Response) => {
   }
 };
 
-export const processCallback = (req: Request, res: Response) => {
-
-  const accessToken = req.query.access_token as string | undefined;
-  const refreshToken = req.query.provider_refresh_token as string | undefined;
-
-  if (!accessToken || !refreshToken) {
-    return res.redirect('http://localhost:3000/callback?error=missing_tokens');
-  }
-
-  // Save refresh_token in an HTTP-only cookie
-  res.cookie('refresh_token', refreshToken, {
-    httpOnly: true,
-    secure: false,
-    sameSite: 'lax',
-    maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-  });
-
-  // Redirect to frontend callback along with access token. 
-  // We use hash fragment so it matches your callback page logic expecting provider_token in hash.
-  return res.redirect(`${process.env.CLIENT_URL || 'http://localhost:3000'}/callback#access_token=${accessToken}`);
-
-};
 
 export const saveRefreshToken = (req: Request, res: Response) => {
   const refreshToken = req.query.refresh_token as string | undefined;
@@ -105,8 +83,8 @@ export const saveRefreshToken = (req: Request, res: Response) => {
   }
   res.cookie('refresh_token', refreshToken, {
     httpOnly: true,
-    secure: false,
-    sameSite: 'lax',
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
     maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
   });
   return res.json({
